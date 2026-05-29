@@ -1,0 +1,21 @@
+{
+  "name": "R & Julia Development",
+  "image": "ghcr.io/aiml-sig/2026-page-workshop-materials:latest",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "reditorsupport.r",
+        "rdebugger.r-debugger",
+        "quarto.quarto",
+        "julialang.language-julia",
+        "analytic-signal.preview-pdf"
+      ],
+      "settings": {
+        "r.rterm.linux": "/usr/local/bin/R",
+        "r.path.linux": "/usr/local/bin/R",
+        "r.plot.useHttpgd": true,
+        "editor.inlineSuggest.enabled": false
+      }
+    }
+  }
+}
