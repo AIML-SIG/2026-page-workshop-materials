@@ -31,7 +31,7 @@ editor: source
 #| label: global-options
 #| include: false
 options(digits = 3, scipen = 5)
-#setwd("/workspaces/2026-page-workshop-materials/03_ML_analytical_toolkit_R/hands-on/")
+setwd("/workspaces/2026-page-workshop-materials/03_ML_analytical_toolkit_R/hands-on/")
 ```
 
 > **How this hands-on session works** · The code in every chunk is **complete and runnable**. After each block you will find:
