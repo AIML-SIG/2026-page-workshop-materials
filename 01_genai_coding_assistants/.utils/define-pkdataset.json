@@ -1,0 +1,183 @@
+{
+  "columns": [
+    {
+      "header": "id",
+      "description": "Unique subject identifier for each individual in the study",
+      "covariate": false,
+      "nonmem_essential": true,
+      "iscategorical": true
+    },
+    {
+      "header": "time",
+      "description": "Time of observation or event in hours from first dosing",
+      "covariate": false,
+      "nonmem_essential": true,
+      "iscategorical": false
+    },
+    {
+      "header": "dv",
+      "description": "Dependent variable; the observed tobramycin concentration in mg/L",
+      "covariate": false,
+      "nonmem_essential": true,
+      "iscategorical": false
+    },
+    {
+      "header": "amt",
+      "description": "Amount of drug administered (dose) in mg; only populated when evid = 1",
+      "covariate": false,
+      "nonmem_essential": true,
+      "iscategorical": false
+    },
+    {
+      "header": "rate",
+      "description": "Infusion rate in mg/h; used to specify IV infusion rate when evid = 1",
+      "covariate": false,
+      "nonmem_essential": true,
+      "iscategorical": false
+    },
+    {
+      "header": "duration",
+      "description": "Duration of infusion in hours; used to specify infusion duration when evid = 1",
+      "covariate": false,
+      "nonmem_essential": true,
+      "iscategorical": false
+    },
+    {
+      "header": "evid",
+      "description": "Event identification flag: 0 = observation/sample, 1 = dose event, 2 = other event, 3 = reset, 4 = reset and dose",
+      "covariate": false,
+      "nonmem_essential": true,
+      "iscategorical": true
+    },
+    {
+      "header": "cmt",
+      "description": "Compartment number; identifies which compartment the dose is given to or sample is from",
+      "covariate": false,
+      "nonmem_essential": true,
+      "iscategorical": true
+    },
+    {
+      "header": "mdv",
+      "description": "Missing dependent variable flag: 0 = observed value, 1 = missing value (e.g., BQL data or dosing event)",
+      "covariate": false,
+      "nonmem_essential": true,
+      "iscategorical": true
+    },
+    {
+      "header": "age",
+      "description": "Age of the subject in years",
+      "covariate": true,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "weight",
+      "description": "Body weight of the subject in kg",
+      "covariate": true,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "sex",
+      "description": "Sex of the subject; coded as 0 = Male, 1 = Female",
+      "covariate": true,
+      "nonmem_essential": false,
+      "iscategorical": true
+    },
+    {
+      "header": "clcr",
+      "description": "Creatinine clearance, a measure of renal function in mL/min",
+      "covariate": true,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "baseline_scr",
+      "description": "Baseline serum creatinine concentration in mg/dL at the start of treatment",
+      "covariate": true,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "diabetes",
+      "description": "Diabetes diagnosis flag: 0 = no diabetes, 1 = diabetes",
+      "covariate": true,
+      "nonmem_essential": false,
+      "iscategorical": true
+    },
+    {
+      "header": "hypertension",
+      "description": "Hypertension diagnosis flag: 0 = no hypertension, 1 = hypertension",
+      "covariate": true,
+      "nonmem_essential": false,
+      "iscategorical": true
+    },
+    {
+      "header": "n_prior_courses",
+      "description": "Number of prior nephrotoxic antibiotic therapy courses",
+      "covariate": true,
+      "nonmem_essential": false,
+      "iscategorical": true
+    },
+    {
+      "header": "cl_i",
+      "description": "Individual empiric Bayesian estimate of tobramycin clearance in L/h",
+      "covariate": false,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "v1_i",
+      "description": "Individual empiric Bayesian estimate of central volume of distribution in L",
+      "covariate": false,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "q_i",
+      "description": "Individual empiric Bayesian estimate of intercompartmental clearance in L/h",
+      "covariate": false,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "v2_i",
+      "description": "Individual empiric Bayesian estimate of peripheral volume of distribution in L",
+      "covariate": false,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "eta_cl",
+      "description": "Individual random effect (ETA) on clearance; deviation from the population typical value on the log scale",
+      "covariate": false,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "eta_v1",
+      "description": "Individual random effect (ETA) on central volume of distribution; deviation from the population typical value on the log scale",
+      "covariate": false,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "eta_q",
+      "description": "Individual random effect (ETA) on intercompartmental clearance; deviation from the population typical value on the log scale",
+      "covariate": false,
+      "nonmem_essential": false,
+      "iscategorical": false
+    },
+    {
+      "header": "eta_v2",
+      "description": "Individual random effect (ETA) on peripheral volume of distribution; deviation from the population typical value on the log scale",
+      "covariate": false,
+      "nonmem_essential": false,
+      "iscategorical": false
+    }
+  ],
+  "information": {
+    "missingdata_indicator": ".",
+    "longitudinal_data": true
+  }
+}

@@ -1,0 +1,169 @@
+{
+  "columns": [
+    {
+      "header": "id",
+      "description": "Unique subject identifier for each individual in the study",
+      "covariate": false,
+      "pkmetric": false,
+      "iscategorical": true
+    },
+    {
+      "header": "age",
+      "description": "Age of the subject in years",
+      "covariate": true,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "weight",
+      "description": "Body weight of the subject in kg",
+      "covariate": true,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "sex",
+      "description": "Sex of the subject; coded as 0 = Male, 1 = Female",
+      "covariate": true,
+      "pkmetric": false,
+      "iscategorical": true
+    },
+    {
+      "header": "clcr",
+      "description": "Creatinine clearance, a measure of renal function in mL/min",
+      "covariate": true,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "baseline_scr",
+      "description": "Baseline serum creatinine concentration in mg/dL at treatment start",
+      "covariate": true,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "diabetes",
+      "description": "Diabetes diagnosis flag: 0 = no diabetes, 1 = diabetes",
+      "covariate": true,
+      "pkmetric": false,
+      "iscategorical": true
+    },
+    {
+      "header": "hypertension",
+      "description": "Hypertension diagnosis flag: 0 = no hypertension, 1 = hypertension",
+      "covariate": true,
+      "pkmetric": false,
+      "iscategorical": true
+    },
+    {
+      "header": "n_prior_courses",
+      "description": "Number of prior nephrotoxic antibiotic therapy courses",
+      "covariate": true,
+      "pkmetric": false,
+      "iscategorical": true
+    },
+    {
+      "header": "eta_cl",
+      "description": "Individual random effect (ETA) on clearance; deviation from typical value on log scale",
+      "covariate": false,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "eta_v1",
+      "description": "Individual random effect (ETA) on central volume; deviation from typical value on log scale",
+      "covariate": false,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "eta_q",
+      "description": "Individual random effect (ETA) on intercompartmental clearance; deviation from typical value on log scale",
+      "covariate": false,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "eta_v2",
+      "description": "Individual random effect (ETA) on peripheral volume; deviation from typical value on log scale",
+      "covariate": false,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "auc24",
+      "description": "Area under the concentration-time curve over 24 hours (mg*h/L)",
+      "covariate": false,
+      "pkmetric": true,
+      "iscategorical": false
+    },
+    {
+      "header": "cmin",
+      "description": "Predicted or estimated trough concentration (minimum concentration, mg/L)",
+      "covariate": false,
+      "pkmetric": true,
+      "iscategorical": false
+    },
+    {
+      "header": "cumulative_auc",
+      "description": "Cumulative exposure over treatment course (sum of AUC values, mg*h/L)",
+      "covariate": false,
+      "pkmetric": true,
+      "iscategorical": false
+    },
+    {
+      "header": "cmax_central",
+      "description": "Maximum concentration in the central compartment (mg/L)",
+      "covariate": false,
+      "pkmetric": true,
+      "iscategorical": false
+    },
+    {
+      "header": "cmax_peripheral",
+      "description": "Maximum concentration in the peripheral compartment (mg/L)",
+      "covariate": false,
+      "pkmetric": true,
+      "iscategorical": false
+    },
+    {
+      "header": "nephro_binary",
+      "description": "Binary nephrotoxicity outcome: 0 = no nephrotoxicity, 1 = nephrotoxicity",
+      "covariate": false,
+      "pkmetric": false,
+      "iscategorical": true
+    },
+    {
+      "header": "nephro_risk_score",
+      "description": "Model-derived nephrotoxicity risk probability score on 0-1 scale",
+      "covariate": false,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "peak_delta_scr",
+      "description": "Maximum increase in serum creatinine from baseline during follow-up (mg/dL)",
+      "covariate": false,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "mean_abs_iwres",
+      "description": "Mean absolute individual weighted residuals summarizing fit quality",
+      "covariate": false,
+      "pkmetric": false,
+      "iscategorical": false
+    },
+    {
+      "header": "n_obs",
+      "description": "Number of concentration observations available for the subject",
+      "covariate": false,
+      "pkmetric": false,
+      "iscategorical": true
+    }
+  ],
+  "information": {
+    "missingdata_indicator": ".",
+    "longitudinal_data": false
+  }
+}

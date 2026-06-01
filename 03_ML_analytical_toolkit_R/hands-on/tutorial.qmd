@@ -1,0 +1,1035 @@
+---
+title: "Machine Learning Toolkit in Action"
+subtitle: "PAGE 2026 AI/ML Satellite Workshop"
+date: "2026-06-02"
+params:
+  instructor: !expr grepl("instructor", Sys.getenv("QUARTO_PROFILE"), fixed = TRUE)
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-title: "Session outline"
+    number-sections: true
+    theme: flatly
+    highlight-style: a11y
+    code-fold: false
+    self-contained: true
+    fig-width: 9
+    fig-height: 5.5
+    fig-dpi: 150
+    df-print: paged
+    callout-appearance: simple
+execute:
+  warning: false
+  message: false
+  cache: false
+editor: source
+---
+
+```{r}
+#| label: global-options
+#| include: false
+options(digits = 3, scipen = 5)
+#setwd("/workspaces/2026-page-workshop-materials/03_ML_analytical_toolkit_R/hands-on/")
+```
+
+> **How this hands-on session works** · The code in every chunk is **complete and runnable**. After each block you will find:
+>
+> - 🔧 **Try it** : one required modification per block. Change the indicated value, re-run, and read the **💡 What you learn** line.
+>
+> - 🚀 **Bonus**: optional deeper modifications (collapsed by default). Open them if you finish early or want to push further at home.
+
+# Setup {#sec-setup}
+
+We will work on a simulated **tobramycin PK/PD** cohort (N = 300) with hidden cluster structure. Three latent risk groups are encoded via ETA × covariate interactions that are *invisible* in the ETAs themselves, in clinical covariates, and in raw outcomes. The session demonstrates that XGBoost + SHAP recovers what naive clustering cannot.
+
+## Load packages and recipes
+
+```{r}
+#| label: setup-packages
+library(tidyverse)
+library(xgboost)
+library(shapviz)
+library(uwot)
+library(cluster)
+library(patchwork)
+
+source("helpers/ggplot_theme.R")
+source("helpers/xgb.R")
+source("helpers/shap.R")
+source("helpers/dim_reduction_clustering.R")
+```
+
+## Load the workshop dataset
+
+```{r}
+#| label: setup-data
+
+df <- read_csv("../../00_data/tobramycin_pd.csv", show_col_types = FALSE)
+
+glimpse(df)
+```
+
+## Cohort summary
+
+```{r}
+#| label: setup-summary
+
+df |>
+  summarise(
+    n_patients   = n(),
+    nephro_rate  = mean(nephro_binary),
+    clcr_median  = median(clcr),
+    age_median   = median(age)
+  ) |>
+  knitr::kable(digits = 3, caption = "Cohort summary")
+```
+
+## ETA distributions, no cluster structure here
+
+```{r}
+#| label: setup-eta-hist
+#| fig-cap: "ETA marginal distributions — unimodal by design"
+#| fig-width: 10
+#| fig-height: 3
+
+df |>
+  select(id, eta_cl, eta_v1, eta_q, eta_v2) |>
+  pivot_longer(-id, names_to = "eta", values_to = "value") |>
+  ggplot(aes(value)) +
+  geom_histogram(bins = 30, fill = blue, alpha = 0.8) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+  facet_wrap(~eta, scales = "free", nrow = 1) +
+  labs(title = "ETA distributions",
+       x = "ETA value", y = "Count") +
+  theme_workshop(11)
+```
+
+::: callout-note
+## What you should see
+
+Four clean, unimodal ETA distributions centred near zero. No multimodality. The cluster structure is *hidden*, invisible in any marginal plot.
+:::
+
+------------------------------------------------------------------------
+
+# XGBoost {#sec-xgb}
+
+XGBoost fits an additive ensemble of decision trees, each one targeting the previous ensemble's residuals. We use it to predict **`nephro_binary`** from patient covariates and PK exposures.
+
+## Build the feature matrix
+
+```{r}
+#| label: xgb-features
+
+features <- c("age", "weight", "sex", "clcr", "baseline_scr",
+              "diabetes", "hypertension", "n_prior_courses",
+              "auc24")
+
+df_xgb <- df |>
+  select(all_of(c("nephro_binary", features))) |>
+  # First factor level = "event" for yardstick. We put "1" first so that
+  # sens/spec read clinically (sens = correctly flags a nephrotox event).
+  mutate(nephro_binary = factor(nephro_binary, levels = c(1, 0)))
+
+# Full-cohort feature matrix — used later for SHAP-based clustering
+# so the UMAP spaces all compare like-for-like (300 patients each).
+X <- df |> select(all_of(features)) |> as.matrix()
+
+dim(df_xgb)
+```
+
+## Train / test split
+
+We hold out 30% of patients, stratified on `nephro_binary` so the test set keeps the same event prevalence as the training set. Cross-validation and hyperparameter tuning happen on the training rows; **all** evaluation, risk scoring and SHAP plots below use the test rows the model never saw.
+
+```{r}
+#| label: xgb-split
+
+set.seed(2026)
+split    <- rsample::initial_split(df_xgb, prop = 0.70, strata = nephro_binary)
+df_train <- rsample::training(split)
+df_test  <- rsample::testing(split)
+
+# Carry the original patient ids alongside the held-out frame so we can
+# label SHAP plots with the real id later (df_xgb itself stays predictors-only).
+test_ids <- df$id[rsample::complement(split)]
+
+# Matrix form is needed for SHAP analysis.
+X_train <- df_train |> select(all_of(features)) |> as.matrix()
+X_test  <- df_test  |> select(all_of(features)) |> as.matrix()
+
+cat("Train rows:", nrow(df_train), " · Test rows:", nrow(df_test), "\n")
+cat("Train event rate:", round(mean(df_train$nephro_binary == 1), 3),
+    " · Test event rate:", round(mean(df_test$nephro_binary  == 1), 3), "\n")
+```
+
+## Tidymodels under the hood
+
+To fit and tune xgboost models we will use a function called `tune_xgb_classification`. Under the hood it runs four tidymodels steps explicitly:
+
+- **Spec** — a model with hyperparameters marked for tuning (`parsnip::boost_tree(... = tune())`).
+- **Folds** — CV folds built on the training set (`rsample::vfold_cv()`).
+- **Grid search** — fit the spec on every fold × grid cell and score on the held-out fold rows (`tune::tune_grid()`).
+- **Final fit** — refit on all training rows using the winning hyperparameters (`parsnip::fit()`).
+
+```{r}
+#| label: xgb-tidymodels-walkthrough
+
+# Makes fold assignment + xgboost's internal RNG reproducible.
+set.seed(2026)
+
+# 1. spec — define the model and mark the hyperparameters we want to tune.
+#    parsnip::tune() leaves a placeholder; tune::tune_grid() fills it in.
+spec <- boost_tree(
+    trees      = 500,    # boosting rounds (fixed — joint tuning with learn_rate is redundant)
+    tree_depth = tune(), # max depth per tree — tune over {2, 3, 5}
+    learn_rate = tune()  # shrinkage per tree — tune over {0.05, 0.10, 0.30}
+  ) |>
+  set_engine("xgboost") |>
+  set_mode("classification")
+
+# 2. folds — rsample::vfold_cv() builds k-fold CV folds *on the training set*.
+folds <- vfold_cv(
+  df_train,                # training rows only — test rows stay held out
+  v      = 5,
+  strata = nephro_binary   # stratify so each fold preserves class balance
+)
+
+# 3. Tuning grid — 9 cells (3 depths × 3 learning rates).
+xgb_grid <- expand.grid(tree_depth = c(2L, 3L, 5L),
+                        learn_rate = c(0.05, 0.10, 0.30))
+
+# 4. Grid search — tune::tune_grid() fits the spec on every fold × grid cell
+#    and scores it on the held-out fold rows. 5 metrics × 9 cells × 5 folds = 225 fits.
+tune_results <- tune::tune_grid(
+  spec,
+  preprocessor = nephro_binary ~ .,
+  resamples    = folds,
+  grid         = xgb_grid,
+  metrics      = metric_set(
+    roc_auc,                           # ranks nephrotox > non-event?
+    yardstick::spec,                   # rate of safe patients correctly cleared
+                                       # (qualified — local `spec` is the model)
+    precision,                         # of flagged patients, % truly nephrotox
+    recall,                            # rate of nephrotox correctly flagged
+    f_meas                             # harmonic mean of precision & recall
+  )
+)
+
+# 5. Pick the winning cell by mean CV roc_auc.
+best_params <- tune::select_best(tune_results, metric = "roc_auc")
+
+# 6. Final fit — tune::finalize_model() pours best_params into the spec,
+#    then parsnip::fit() trains the model on ALL training rows. The test
+#    rows stay untouched for the SHAP + evaluation steps below.
+xgb_fit_manual <- parsnip::fit(
+  tune::finalize_model(spec, best_params),
+  nephro_binary ~ .,
+  data = df_train
+)
+
+# tune::collect_metrics() — mean ± std_err across folds, per grid cell + metric.
+tune::collect_metrics(tune_results) |>
+  dplyr::filter(.metric == "roc_auc") |>
+  dplyr::arrange(dplyr::desc(mean)) |>
+  dplyr::select(tree_depth, learn_rate, mean, std_err) |>
+  knitr::kable(digits = 3,
+               caption = "5-fold CV ROC-AUC for every grid cell (sorted)")
+```
+
+
+::: callout-tip
+From here on we use `tune_xgb_classification()` so the exercises and chunks stay short — its body is exactly what you just ran (spec → folds → grid → select_best → final fit on the training set).
+:::
+
+## Tune on training set
+
+`tune_xgb_classification()` wraps the four steps above and refits the winning model on **all training rows** for downstream use. Its arguments give you the following controls:
+
+- **`trees = 500`**, number of boosting rounds (fixed during tuning — joint sweeps over `trees` and `learn_rate` are redundant because the two trade off against each other).
+- **`grid`**, a `data.frame` of `tree_depth` × `learn_rate` cells. Default = `expand.grid(tree_depth = c(2, 3, 5), learn_rate = c(0.05, 0.10, 0.30))`. Pass your own to widen or narrow the sweep.
+- **`v = 5`**, number of CV folds (on the training set), stratified on the outcome so each fold preserves event prevalence.
+- **`seed = 2026`**, RNG seed for fold assignment + xgboost's internal randomness — the same call reproduces the same tuning and the same final model.
+
+Override any default by passing it as a named argument.
+
+```{r}
+#| label: xgb-fit
+
+xgb_out <- tune_xgb_classification(df_train, nephro_binary ~ .)
+
+xgb_fit <- xgb_out$fit
+
+cat("Best params:  tree_depth =", xgb_out$best_params$tree_depth,
+    " · learn_rate =", xgb_out$best_params$learn_rate,
+    " · CV ROC-AUC =", xgb_out$best_cv_auc, "\n")
+
+# Tuning surface — every cell of the (tree_depth × learn_rate) grid.
+xgb_tune_heatmap(xgb_out$tune_results)
+```
+
+
+```{r}
+#| label: xgb-fit-best-metrics
+
+# All 5 metrics for the winning cell, value per fold + mean [min–max] summary.
+xgb_out$cv_metrics_best |>
+  dplyr::select(.metric, dplyr::starts_with("Fold"), summary) |>
+  knitr::kable(
+    digits    = 3,
+    col.names = c("Metric", "Fold 1", "Fold 2", "Fold 3", "Fold 4", "Fold 5",
+                  "Mean [min–max]"),
+    caption   = "5-fold CV metrics for the winning grid cell"
+  )
+```
+
+::: callout-note
+## What each metric means *for this nephrotoxicity model*
+
+Each row answers a different question about the same model — no single number tells the whole story.
+
+| Metric      | What it measures                                                                                          | Threshold-dep? | Clinical reading                                                                          |
+|-------------|-----------------------------------------------------------------------------------------------------------|:--------------:|-------------------------------------------------------------------------------------------|
+| `roc_auc`   | Probability the model ranks a random event above a random non-event (threshold-free discrimination).     | no             | 0.5 = chance, 1.0 = perfect ranking. Robust to class imbalance.                           |
+| `spec`      | True negative rate: of patients who stayed safe, fraction correctly cleared at the 0.5 cutoff.            | yes            | Low ⇒ over-flagging healthy patients (unnecessary monitoring or dose changes).            |
+| `precision` | Positive predictive value: of patients flagged high-risk, fraction who developed nephrotoxicity.          | yes            | Strongly depends on event prevalence — "if I trust a flag, how often is it real?".        |
+| `recall`    | Sensitivity / true positive rate: of patients who developed nephrotoxicity, fraction correctly flagged.   | yes            | Low ⇒ missed cases, the clinically dangerous failure mode. (`recall` and `sens` are the same metric in yardstick.) |
+| `f_meas`    | F1: harmonic mean of `precision` and `recall` (`2·P·R / (P+R)`).                                          | yes            | High only when *both* precision and recall are high; ignores true negatives.              |
+
+Further reading: Van Calster B., Collins G. S., Vickers A. J., Wynants L., Kerr K. F., Barreñada L., … & Steyerberg E. W., *Evaluation of performance measures in predictive artificial intelligence models to support medical decisions: overview and guidance* (The Lancet Digital Health, 2025); [yardstick metric reference](https://yardstick.tidymodels.org/reference/index.html).
+:::
+
+
+## Score the test set
+
+CV ROC-AUC summarises the model across training folds; to use the model downstream we need to score every patient in the held-out test set. `predict(xgb_fit, new_data = df_test, type = "prob")` returns one column per class — we pull `.pred_1`, the predicted probability of nephrotoxicity, as the per-patient **risk score** on the \[0, 1\] scale. Bonus 3 below visualises the distribution of these scores by observed outcome.
+
+```{r}
+#| label: xgb-score-test
+
+df_scored <- df_test |>
+  mutate(id        = test_ids,
+         risk_pred = predict(xgb_fit, new_data = df_test,
+                             type = "prob")$.pred_1)
+```
+
+::: {.callout-warning icon="false"}
+## 🔧 Try it · Tree depth and interactions
+
+The tuning grid above already contains every (depth, learn_rate) cell. Pull the depth-5 row directly and see how the best depth-5 model compares to the overall winner — no refitting needed.
+
+```{r}
+#| label: try-xgb-depth5
+#| eval: !expr params$instructor
+
+depth5_best <- tune::collect_metrics(xgb_out$tune_results) |>
+  dplyr::filter(.metric == "roc_auc", tree_depth == 5) |>
+  dplyr::arrange(dplyr::desc(mean)) |>
+  dplyr::slice(1)
+
+cat("Best CV ROC-AUC (tuned baseline):", xgb_out$best_cv_auc,
+    " · depth =", xgb_out$best_params$tree_depth,
+    " · lr =", xgb_out$best_params$learn_rate, "\n",
+    "Best CV ROC-AUC (depth = 5):     ", round(depth5_best$mean, 3),
+    " · lr =", depth5_best$learn_rate, "\n")
+```
+
+**💡 What you learn**: Deeper trees are not automatically better. `tree_depth` sets how many covariates a single tree can combine; xgboost then **sums many trees**, so even shallow trees can build up multi-covariate effects across the ensemble. With only N=300 patients a depth-5 tree has more freedom to fit noise, which typically shows up as a lower cross-validated ROC-AUC than the shallower cells — even though the simulation contains higher-order covariate × exposure interactions. In short, treat `tree_depth` as a hyperparameter and select it from cross-validation, rather than from the assumption that a more flexible model will perform better.
+:::
+
+::: {.callout-tip icon="false" collapse="true"}
+## 🚀 Bonus 1 · Does the choice of exposure metric matter?
+
+Swap the baseline exposure summary (`auc24`) for the trough (`cmin`) — clinically, sustained high troughs are the canonical aminoglycoside-nephrotoxicity driver, so it is a defensible alternative. Refit with the un-tuned `fit_xgb_classification()` so the exposure column is the only difference vs the baseline, and compare the mean CV ROC-AUC.
+
+```{r}
+#| label: try-xgb-swap-exposure
+#| eval: !expr params$instructor
+
+df_xgb_cmin <- df |>
+  dplyr::select(dplyr::all_of(c("nephro_binary",
+                                setdiff(features, "auc24"), "cmin"))) |>
+  dplyr::mutate(nephro_binary = factor(nephro_binary, levels = c(1, 0)))
+
+set.seed(2026)  # same seed + strata → same row assignment as the baseline split
+split_cmin    <- rsample::initial_split(df_xgb_cmin, prop = 0.70,
+                                        strata = nephro_binary)
+df_train_cmin <- rsample::training(split_cmin)
+
+xgb_cmin <- fit_xgb_classification(df_train_cmin, nephro_binary ~ .,
+                                   seed = 2026)
+
+cat("Mean CV ROC-AUC (baseline, exposure = auc24):", xgb_out$best_cv_auc, "\n")
+cat("Mean CV ROC-AUC (swap,     exposure = cmin): ", xgb_cmin$cv_auc,     "\n")
+```
+
+**💡 What you learn**: Different exposure metrics summarise the concentration-time profile differently — `auc24` integrates the full daily exposure, `cmin` is just the trough at the end of the dosing interval. Whether the swap helps or hurts depends on which exposure-response surface the simulation encodes risk on. "Include the PK exposure" isn't a single decision: *which* exposure metric you pick is a covariate-selection choice in its own right, and cross-validated ROC-AUC is the simplest check on whether the chosen metric carries enough of the exposure-toxicity signal.
+:::
+
+::: {.callout-tip icon="false" collapse="true"}
+## 🚀 Bonus 2 · Learning rate vs number of rounds
+
+Retune with a faster learner and a tight budget — `trees = 100` and only the `learn_rate = 0.30` slice of the grid. Compare its best CV AUC to the tuned baseline.
+
+```{r}
+#| label: try-xgb-fast
+#| eval: !expr params$instructor
+
+xgb_fast <- tune_xgb_classification(
+  df_train, nephro_binary ~ .,
+  seed  = 2026,
+  trees = 100,
+  grid  = expand.grid(tree_depth = c(2L, 3L, 5L), learn_rate = 0.30)
+)
+
+cat("Best CV ROC-AUC (tuned baseline, 500 trees, lr ∈ {0.05, 0.10, 0.30}):",
+    xgb_out$best_cv_auc,  "\n")
+cat("Best CV ROC-AUC (fast: 100 trees, lr = 0.30):                       ",
+    xgb_fast$best_cv_auc, "\n")
+```
+
+**💡 What you learn**: Learning rate and number of boosting rounds trade off against each other. A small number of aggressive rounds (high `learn_rate`, few `trees`) can in principle reach a comparable fit to many slower rounds, but the aggressive configuration tends to be less stable across CV folds and is more likely to overshoot the optimum. For a population-scale risk model, where stability across resamples is part of the model qualification, a smaller learning rate with more rounds is the more conservative default — and the cross-validated ROC-AUC comparison here is what tells you whether the lower-budget configuration is acceptable for this dataset.
+:::
+
+::: {.callout-tip icon="false" collapse="true"}
+## 🚀 Bonus 3 · Risk score distribution on the test set
+
+CV ROC-AUC tells you the model ranks events above non-events *on average* across the training folds. Overlay the histogram of the test-set risk scores by observed outcome to answer a complementary question: how cleanly do the two groups separate on patients the model never saw? A well-discriminating model concentrates true events near 1 and non-events near 0; overlap in the middle is where the model is uncertain and where the choice of decision threshold has to make trade-offs.
+
+```{r}
+#| label: try-xgb-risk-hist
+#| eval: !expr params$instructor
+#| fig-cap: "Predicted P(nephrotoxicity) on the held-out test set, by observed outcome"
+
+df_scored |>
+  ggplot(aes(risk_pred, fill = factor(nephro_binary))) +
+  geom_histogram(bins = 40, alpha = 0.75, position = "identity") +
+  scale_fill_manual(values = outcome_pal,
+                    labels = c("No event", "Nephrotox")) +
+  labs(title = "Risk score distribution — test set",
+       x = "Predicted P(nephrotox)", y = "Count", fill = NULL) +
+  theme_workshop(11)
+```
+
+**💡 What you learn**: The held-out histogram separates events (orange) from non-events (navy), with overlap concentrated in the middle where the model is genuinely uncertain. This is the visual companion to the CV ROC-AUC number — the AUC tells you that the ranking is good, the histogram tells you how *concentrated* each class is on its side of the score axis, which is what governs the trade-off between sensitivity and specificity at any chosen cutoff.
+:::
+
+## Further reading
+
+- Van Calster B., Collins G. S., Vickers A. J., Wynants L., Kerr K. F., Barreñada L., … & Steyerberg E. W., *Evaluation of performance measures in predictive artificial intelligence models to support medical decisions: overview and guidance* (The Lancet Digital Health, 2025); [yardstick metric reference](https://yardstick.tidymodels.org/reference/index.html).
+- Wiens, M., Verone‐Boyle, A., Henscheid, N., Podichetty, J. T., & Burton, J. (2025). *A tutorial and use case example of the eXtreme gradient boosting (XGBoost) artificial intelligence algorithm for drug development applications.* Clinical and Translational Science, 18(3), e70172.
+
+------------------------------------------------------------------------
+
+# SHAP {#sec-shap}
+
+SHAP decomposes each prediction into per-feature contributions on the log-odds scale: additive, per-patient.
+
+All SHAP outputs below are computed on the **held-out test set** (`X_test`) — every dot, bar and waterfall is a patient the model never trained on. This is the honest population view for a deployed model.
+
+## Compute SHAP values
+
+```{r}
+#| label: shap-compute
+
+# SHAP for plots — held-out test rows only (the honest explanation set).
+shp <- compute_shap(extract_fit_engine(xgb_fit), X_test)
+
+# SHAP matrix for downstream UMAP clustering — full cohort, so the SHAP space
+# compares like-for-like with the PK and outcome spaces (300 patients each).
+shap_mat <- shap_matrix(compute_shap(extract_fit_engine(xgb_fit), X))
+
+dim(shap_mat)
+```
+
+## Mean |SHAP| plot, importance bar
+
+A magnitude-only summary: how much, on average, does each feature shift the log-odds — no direction, no per-patient spread. The natural companion to the beeswarm below.
+
+```{r}
+#| label: shap-importance
+#| fig-cap: "Mean |SHAP| on the held-out test set"
+
+shap_importance_bar(shp, max_display = 10L,
+                    title = "Mean |SHAP| — test-set feature importance")
+```
+
+## Beeswarm plot
+
+The beeswarm unpacks the importance bar: one dot per patient per feature, x-position = SHAP value (how much that feature shifted *that patient's* log-odds), colour = the feature value (low → blue, high → red). Width at any x tells you how many patients are at that contribution; the colour gradient reveals whether high values of a feature push risk up or down.
+
+```{r}
+#| label: shap-beeswarm
+#| fig-height: 6
+#| fig-cap: "SHAP beeswarm — drivers of nephrotoxicity on the test set"
+
+shap_beeswarm(shp, max_display = 10L,
+              title = "Nephrotoxicity drivers — SHAP beeswarm (test set)")
+```
+
+## Waterfall plot, single highest-risk patient
+
+The waterfall takes one patient and decomposes their prediction into per-feature log-odds contributions, plotted from the cohort-average baseline `E[f(X)]` up to the model's log-odds for that patient. Bars to the right pushed the patient's risk up; bars to the left pulled it down. Use it to read off *why* the model flagged a specific individual.
+
+```{r}
+#| label: shap-waterfall
+
+high_risk_idx <- which.max(df_scored$risk_pred)
+
+cat("Patient id:        ", df_scored$id[high_risk_idx], "\n")
+cat("Predicted P(tox):  ", round(df_scored$risk_pred[high_risk_idx], 3), "\n")
+cat("Observed outcome:  ", df_scored$nephro_binary[high_risk_idx], "\n")
+```
+
+```{r}
+#| label: shap-waterfall-plot
+#| fig-height: 5
+
+shap_waterfall(shp, row_id = high_risk_idx,
+               title = paste0("SHAP waterfall — Patient ID: ",
+                              df_scored$id[high_risk_idx]))
+```
+
+::: callout-tip
+## Why bars can be negative even though the endpoint is classification
+
+The label is binary (0 / 1), but XGBoost does not output `0` or `1` — under the `binary:logistic` objective it outputs the **log-odds** of the positive class, a continuous value on `(−∞, +∞)`. The probability you see (`risk_pred`) is `plogis(log-odds)` applied to that output.
+
+SHAP decomposes the log-odds output, so each waterfall bar is a contribution on the **logit scale**, not on the probability scale, and the bars sum to `model log-odds − base log-odds` (`E[f(X)]`, the cohort-average prediction). A negative bar means that covariate pushed the patient's log-odds *down* — perfectly legal even for the highest-risk patient, where most bars are positive but a handful (e.g. high CLCR, no diabetes) still push down.
+:::
+
+## Dependence plot, CLCR
+
+```{r}
+#| label: shap-dependence
+#| fig-cap: "SHAP dependence on CLCR, coloured by 24-h AUC"
+
+shap_dependence(shp, v = "clcr", color_var = "auc24")
+```
+
+::: callout-note
+## What you should see
+
+- Beeswarm: a handful of features dominate; `clcr` and `baseline_scr` cluster at the top.
+- Waterfall: bars to the right increase risk; to the left, decrease it.
+- Dependence on `clcr`: **negative slope**, lower CLCR → higher SHAP → higher predicted risk.
+:::
+
+::: {.callout-tip icon="false" collapse="true"}
+## 🚀 Bonus 1 · See the interaction directly
+
+The main dependence plot above put `clcr` on the x-axis and used `auc24` for colour. Flip it: put `auc24` on the x-axis and colour by `clcr`. Same interaction, viewed from the exposure side.
+
+```{r}
+#| label: try-shap-cl
+#| eval: !expr params$instructor
+
+shap_dependence(shp, v = "auc24", color_var = "clcr")
+```
+
+**💡 What you learn**: A pure marginal exposure effect would be a single curve — same `auc24`, same SHAP contribution. The fact that the cloud splits into colour-banded layers is the visible signature of an **exposure × covariate interaction**: at the same 24-h AUC, patients with low CLCR (impaired renal clearance) carry a much larger SHAP contribution than patients with preserved renal function. The model has learned what the aminoglycoside literature already says — exposure becomes dangerous mainly in patients whose kidneys cannot clear it. SHAP dependence + colour-by is the most direct way to read off these interactions from a tree-based model, and the interaction reads the same whichever variable you put on the x-axis.
+:::
+
+::: {.callout-tip icon="false" collapse="true"}
+## 🚀 Bonus 2 · Pick the top driver programmatically
+
+Instead of manually selecting `clcr` or `auc24` for the dependence plot, take the **top 7 covariates by mean |SHAP|** directly from the SHAP matrix, then plot the dependence of the highest-ranked covariate — letting `sv_dependence(color_var = "auto")` choose the strongest interaction partner from within that top-7 set. This is the pattern you would use on a model with dozens of covariates where the dominant drivers are not known in advance.
+
+```{r}
+#| label: try-shap-top-driver
+#| eval: !expr params$instructor
+#| fig-cap: "SHAP dependence for the top mean-|SHAP| covariate, coloured by auto-detected interaction partner"
+
+mean_abs_shap <- shap_matrix(shp) |>
+  abs() |>
+  colMeans() |>
+  sort(decreasing = TRUE) |>
+  head(7)
+
+cat("Top 7 covariates by mean |SHAP|:\n")
+print(round(mean_abs_shap, 3))
+
+top_feature <- names(mean_abs_shap)[1]
+
+shap_dependence(shp, v = top_feature, color_var = "auto",
+                title = paste0("SHAP dependence — ", top_feature,
+                               " (top mean-|SHAP| driver)"))
+```
+
+**💡 What you learn**: Mean |SHAP| is the population-level covariate-importance ranking — the same ordering the bar plot visualises — and the natural starting point when you have no prior on which covariate matters. Taking the **top 7** trims the long tail of low-importance covariates before any downstream choice (which dependence to plot, which features to feed UMAP); `color_var = "auto"` then picks the covariate whose values explain the most residual spread in the dependence cloud, surfacing the strongest interaction partner without you needing to guess. On this nine-covariate model the top 7 just reproduces the `clcr × auc24` interaction; on a model with a wide covariate set (full lab panels, comorbidity flags, dosing-history summaries) those few lines are how you locate the dominant driver and its interaction partner without manual screening.
+:::
+
+::: {.callout-tip icon="false" collapse="true"}
+## 🚀 Bonus 3 · SHAP stability — Train vs Test across CV folds
+
+The plots above are computed on a single model and the held-out test set — one point estimate per feature. Before computing SHAP on the full cohort for the clustering step below, check that the model explains training and test patients similarly. Refit the best-params xgboost on each of 5 CV folds, compute SHAP within each fold on **both** the analysis (Train) and assessment (Test) rows, and look at two views: mean |SHAP| with ±1 SD across folds, and the CLCR dependence cloud coloured by fold — both faceted Train vs Test.
+
+```{r}
+#| label: try-shap-folds-build
+#| eval: !expr params$instructor
+#| include: false
+
+set.seed(2026)
+folds_shap <- rsample::vfold_cv(df_train, v = 5, strata = nephro_binary)
+
+# Best params from the tuning run above — fixed across folds so the only thing
+# varying is the patient assignment to analysis/assessment.
+shap_spec <- boost_tree(
+    trees      = 500,
+    tree_depth = xgb_out$best_params$tree_depth,
+    learn_rate = xgb_out$best_params$learn_rate
+  ) |>
+  set_engine("xgboost") |>
+  set_mode("classification")
+
+# For each fold: fit on the analysis (Train) rows, compute SHAP on both the
+# analysis (Train) and assessment (Test) rows. Returns a long tibble with one
+# row per (fold × split × patient × feature) so downstream chunks can either
+# aggregate (importance bar) or plot raw (dependence).
+per_fold_shap <- purrr::map_dfr(seq_len(nrow(folds_shap)), function(i) {
+  ana   <- rsample::analysis(folds_shap$splits[[i]])
+  ass   <- rsample::assessment(folds_shap$splits[[i]])
+  fit_i <- parsnip::fit(shap_spec, nephro_binary ~ ., data = ana)
+
+  long_for <- function(df_split, split_label) {
+    Xm <- df_split |> dplyr::select(dplyr::all_of(features)) |> as.matrix()
+    sm <- shap_matrix(compute_shap(extract_fit_engine(fit_i), Xm))
+    tibble::tibble(
+      fold          = folds_shap$id[i],
+      split         = split_label,
+      row_idx       = rep(seq_len(nrow(Xm)), times = ncol(Xm)),
+      feature       = rep(colnames(Xm),      each  = nrow(Xm)),
+      feature_value = as.vector(Xm),
+      shap_value    = as.vector(sm)
+    )
+  }
+
+  dplyr::bind_rows(long_for(ana, "Train"), long_for(ass, "Test"))
+})
+```
+
+```{r}
+#| label: try-shap-importance-fold-stability
+#| eval: !expr params$instructor
+#| fig-cap: "Mean |SHAP| across 5 CV folds — bar = average across folds, error bar = ±1 SD — faceted by Train vs Test"
+
+imp_summary <- per_fold_shap |>
+  dplyr::group_by(fold, split, feature) |>
+  dplyr::summarise(mean_abs_shap = mean(abs(shap_value)), .groups = "drop") |>
+  dplyr::group_by(feature, split) |>
+  dplyr::summarise(mean_imp = mean(mean_abs_shap),
+                   sd_imp   = sd(mean_abs_shap),
+                   .groups  = "drop")
+
+feature_order <- imp_summary |>
+  dplyr::filter(split == "Test") |>
+  dplyr::arrange(mean_imp) |>
+  dplyr::pull(feature)
+
+imp_summary <- imp_summary |>
+  dplyr::mutate(feature = factor(feature, levels = feature_order),
+                split   = factor(split,   levels = c("Train", "Test")))
+
+ggplot(imp_summary, aes(x = mean_imp, y = feature)) +
+  geom_col(fill = blue, alpha = 0.85) +
+  geom_errorbarh(aes(xmin = pmax(mean_imp - sd_imp, 0),
+                     xmax = mean_imp + sd_imp),
+                 height = 0.25, colour = "grey30") +
+  facet_wrap(~ split) +
+  labs(title    = "Mean |SHAP| with 5-fold CV variability — Train vs Test",
+       x = "Mean |SHAP|", y = NULL) +
+  theme_workshop(11)
+```
+
+```{r}
+#| label: try-shap-dependence-fold-stability
+#| eval: !expr params$instructor
+#| fig-cap: "SHAP dependence on CLCR — coloured by CV fold, faceted by Train vs Test"
+
+dep_feature <- "clcr"
+
+dep_long <- per_fold_shap |>
+  dplyr::filter(feature == dep_feature) |>
+  dplyr::rename(clcr_value = feature_value, clcr_shap = shap_value) |>
+  dplyr::mutate(split = factor(split, levels = c("Train", "Test")))
+
+ggplot(dep_long, aes(clcr_value, clcr_shap, colour = fold)) +
+  geom_point(alpha = 0.4, size = 1.2) +
+  geom_smooth(aes(group = fold), method = "loess", se = FALSE,
+              linewidth = 0.9) +
+  scale_colour_brewer(palette = "Dark2") +
+  facet_wrap(~ split) +
+  labs(title    = paste0("SHAP dependence — ", dep_feature,
+                         " · one colour per CV fold"),
+       subtitle = "Points = per-patient SHAP · lines = per-fold LOESS smooth",
+       x        = dep_feature,
+       y        = paste0("SHAP(", dep_feature, ")"),
+       colour   = "CV fold") +
+  theme_workshop(11)
+```
+
+**💡 What you learn**: The 5-fold error bars are narrow on the top-ranked covariates — their position at the top of the importance ranking is not an artefact of which patients ended up held out — and the CLCR dependence trend (CLCR ↓ → SHAP ↑) survives in both Train and Test facets across all 5 folds. That is the qualification check for computing SHAP on the full cohort in the clustering step below: the model is not "explaining itself differently" on the two splits. If a covariate were dominant on Train but barely registered on Test, or if the dependence slope flipped between facets, that would flag memorisation and SHAP-on-the-full-cohort would mix two different stories together.
+:::
+
+## Further reading
+
+- Harun, R., Yang, E., Kassir, N., Zhang, W., & Lu, J. (2023). *Machine learning for exposure-response analysis: methodological considerations and confirmation of their importance via computational experimentations.* Pharmaceutics, 15(5), 1381.
+- Ponce‐Bobadilla, A. V., Schmitt, V., Maier, C. S., Mensing, S., & Stodtmann, S. (2024). *Practical guide to SHAP analysis: Explaining supervised machine learning model predictions in drug development.* Clinical and Translational Science, 17(11), e70056.
+- Molnar, C. (2025). *Interpreting machine learning models with SHAP: a guide with Python examples and theory on shapley values.* Christoph Molnar.
+
+------------------------------------------------------------------------
+
+# Dimensionality Reduction + Clustering {#sec-umap}
+
+Cluster the same 300 patients three different ways. If the lecture story holds, clusters should only appear in SHAP space.
+
+## UMAP + PAM under the hood
+
+The wrapper we use for all three input spaces below is `run_dim_reduction_clustering()`. Under the hood it does three things:
+
+- **Scale** — z-score the feature matrix so no column dominates the distance metric.
+- **Embed** — project into 2D with UMAP (`uwot::umap()`).
+- **Cluster** — partition the 2D embedding into `k` groups with PAM (`cluster::pam()`).
+
+Clustering happens in the *embedding*, not in the raw feature space — UMAP's role is to compress the input geometry into a low-dimensional representation that k-medoids can partition.
+
+```{r}
+#| label: umap-walkthrough
+
+# pk_mat — posthoc PK parameter matrix, reused by the Posthoc PK space chunk below.
+pk_mat <- df |>
+  select(cl, v1, q, v2) |>
+  as.matrix()
+
+# 1. Scale — z-score each column so a high-variance feature doesn't
+#    dominate the Euclidean distance UMAP works on.
+mat <- scale(pk_mat)
+mat[!is.finite(mat)] <- 0     # zero-variance columns → NaN, kill them
+
+# 2. Embed — uwot::umap() builds a k-NN graph (k = n_neighbors) and lays
+#    it out in 2D. n_threads = 1 keeps the layout reproducible across runs.
+set.seed(2026)
+emb <- uwot::umap(
+  mat,
+  n_neighbors = 15,    # neighbourhood size — small = local, large = global
+  min_dist    = 0.05,  # how tightly points pack inside a cluster
+  metric      = "euclidean",
+  n_threads   = 1,
+  verbose     = FALSE
+)
+
+# 3. Cluster — cluster::pam() partitions the 2D embedding into k medoids.
+#    PAM is k-medoids: more robust to outliers than k-means, no centroid
+#    assumption, works with any distance you can compute.
+pam_fit <- cluster::pam(emb, k = 3, metric = "euclidean")
+
+# Bundle the per-patient embedding + cluster label as a tibble for plotting.
+u_pk_manual <- tibble::tibble(
+  U1      = emb[, 1],
+  U2      = emb[, 2],
+  cluster = factor(pam_fit$clustering)
+)
+
+head(u_pk_manual)
+```
+
+::: callout-tip
+From here on we use `run_dim_reduction_clustering()` so the exercises stay short — its body is exactly what you just ran (scale → `uwot::umap()` → `cluster::pam()` → tibble).
+:::
+
+`run_dim_reduction_clustering()` wraps the three steps above and returns a `U1 / U2 / cluster` tibble ready for plotting. Its arguments give you the following controls:
+
+- **`mat`**, the input feature matrix (or data frame coerced to one). One row per patient, one column per feature.
+- **`k = 3`**, number of PAM clusters to extract from the 2D embedding.
+- **`n_neighbors = 15`**, UMAP neighbourhood size. Small values emphasise **local** structure (tight micro-clusters, more fragmentation); large values emphasise **global** structure (broader continents).
+- **`min_dist = 0.05`**, minimum distance between points in the embedding — small values let clusters pack tightly, larger values spread them out for readability.
+- **`seed = 2026`**, RNG seed for UMAP's stochastic optimisation — the same call reproduces the same layout.
+- **`scale = TRUE`**, z-score columns before embedding so no high-variance feature dominates the Euclidean distance. Turn off only if the matrix is already standardised.
+
+Override any default by passing it as a named argument.
+
+## Posthoc PK space
+
+```{r}
+#| label: umap-pk-posthoc
+
+u_pk <- run_dim_reduction_clustering(pk_mat, k = 3, seed = 2026)
+```
+
+## Outcome space (the naive baseline)
+
+```{r}
+#| label: umap-outcome
+
+outcome_mat <- df |>
+  select(nephro_binary, peak_delta_scr, auc24, cmin) |>
+  as.matrix()
+
+u_outcome <- run_dim_reduction_clustering(outcome_mat, k = 3, seed = 2026)
+```
+
+## SHAP space
+
+Filter to the top SHAP features before clustering. Low-signal SHAP dimensions add noisy neighbours to the UMAP k-NN graph and blur the phenotype.
+
+```{r}
+#| label: umap-shap
+
+shap_top <- shap_top_features(shap_mat, k = 8)
+colnames(shap_top)
+
+u_shap   <- run_dim_reduction_clustering(shap_top, k = 3, seed = 2026)
+```
+
+## Side-by-side
+
+```{r}
+#| label: umap-side-by-side
+#| fig-cap: "Three input spaces, same 300 patients"
+#| fig-width: 14
+#| fig-height: 4.5
+
+p_pk      <- plot_umap(u_pk,      "Posthoc PK space")
+p_outcome <- plot_umap(u_outcome, "Outcome space")
+p_shap    <- plot_umap(u_shap,    "SHAP space")
+
+(p_pk | p_outcome | p_shap) 
+```
+
+Re-colour the outcome UMAP by `nephro_binary` to see what structure it *does* carry:
+
+```{r}
+#| label: umap-outcome-by-event
+#| fig-cap: "Outcome UMAP coloured by `nephro_binary` (event vs no-event)"
+#| fig-width: 6
+#| fig-height: 4.5
+
+u_outcome_event <- u_outcome |>
+  mutate(nephro_binary = factor(df$nephro_binary))
+
+plot_umap(u_outcome_event, "Outcome space, by event status",
+          colour_col = "nephro_binary")
+```
+
+::: callout-note
+## What you should see
+
+Posthoc PK space and outcome space show no clear separation — PAM still returns three labels, but they sit on top of a structureless cloud. Recolouring the outcome UMAP by `nephro_binary` reveals what that embedding actually separates: event versus non-event, not the three latent phenotypes. SHAP space, by contrast, shows three well-separated groups, which is the central result of this section.
+:::
+
+::: {.callout-warning icon="false"}
+## 🔧 Try it · Picking k
+
+Re-run the SHAP-space clustering with PAM `k = 4` and `k = 5`. Plot all three side by side.
+
+```{r}
+#| label: try-umap-k
+#| eval: !expr params$instructor
+#| fig-width: 14
+#| fig-height: 4.5
+
+u_shap_k4 <- run_dim_reduction_clustering(shap_top, k = 4, seed = 2026)
+u_shap_k5 <- run_dim_reduction_clustering(shap_top, k = 5, seed = 2026)
+
+(plot_umap(u_shap,    "SHAP space · k = 3") |
+ plot_umap(u_shap_k4, "SHAP space · k = 4") |
+ plot_umap(u_shap_k5, "SHAP space · k = 5")) +
+  plot_annotation(title = "Same SHAP embedding, three choices of k")
+```
+
+**💡 What you learn**: The number of clusters `k` is a modelling choice, not something the data hands you. To defend a value of `k` you need either external knowledge (here: the simulation defines 3 latent phenotypes) or an internal criterion (silhouette, gap statistic). At `k` ≠ the truth, PAM still returns clusters — they just stop mapping onto a clinically interpretable phenotype. You will quantify exactly how much a wrong `k` costs against the hidden ground truth in the Reveal section below.
+:::
+
+::: {.callout-tip icon="false" collapse="true"}
+## 🚀 Bonus 1 · How many SHAP features are enough?
+
+Filter SHAP to the top-4 features instead of top-8 and re-run.
+
+```{r}
+#| label: try-umap-shap-top4
+#| eval: !expr params$instructor
+#| fig-width: 9
+#| fig-height: 4.5
+
+shap_top4 <- shap_top_features(shap_mat, k = 4)
+u_shap_4  <- run_dim_reduction_clustering(shap_top4, k = 3, seed = 2026)
+
+(plot_umap(u_shap,   "Top-8 SHAP (baseline)") |
+ plot_umap(u_shap_4, "Top-4 SHAP"))
+```
+
+**💡 What you learn**: Filtering to the top-k SHAP features before UMAP is effectively a noise-reduction step on the input space. Too few covariates and you discard signal the model relied on; too many and the low-importance covariates add noise that UMAP distributes across the embedding. The choice of `k` for the top-k filter is itself a tuning parameter — not a fixed constant — and should be checked against the cluster recovery metric you intend to report.
+:::
+
+::: {.callout-tip icon="false" collapse="true"}
+## 🚀 Bonus 2 · Local vs global UMAP
+
+Change `n_neighbors` from 15 (default) to 5 (local) and 50 (global).
+
+```{r}
+#| label: try-umap-neighbors
+#| eval: !expr params$instructor
+#| fig-width: 12
+#| fig-height: 3.8
+
+u_shap_local  <- run_dim_reduction_clustering(shap_top, k = 3, seed = 2026, n_neighbors = 5)
+u_shap_global <- run_dim_reduction_clustering(shap_top, k = 3, seed = 2026, n_neighbors = 50)
+
+p_local    <- plot_umap(u_shap_local,  "n_neighbors = 5")  +
+                labs(title = "UMAP\nn_neighbors = 5 (local)")
+p_baseline <- plot_umap(u_shap,        "n_neighbors = 15") +
+                labs(title = "UMAP\nn_neighbors = 15 (baseline)")
+p_global   <- plot_umap(u_shap_global, "n_neighbors = 50") +
+                labs(title = "UMAP\nn_neighbors = 50 (global)")
+
+p_local | p_baseline | p_global
+```
+
+**💡 What you learn**: `n_neighbors` controls how UMAP balances **local** versus **global** neighbourhood structure. Small values preserve fine detail but can fragment one real phenotype across multiple visual clusters; large values smooth everything toward a single continuous region and erase the separation. The embedding is sensitive to this argument — a UMAP plot is not a unique view of the data, and reporting a single embedding without a sensitivity check on `n_neighbors` is a common pitfall in the literature.
+:::
+
+::: {.callout-tip icon="false" collapse="true"}
+## 🚀 Bonus 3 · Does the clusterer matter?
+
+Replace PAM with k-means on the UMAP coordinates.
+
+```{r}
+#| label: try-umap-kmeans
+#| eval: !expr params$instructor
+#| fig-width: 9
+#| fig-height: 4.5
+
+set.seed(2026)
+km_fit  <- kmeans(u_shap[, c("U1", "U2")], centers = 3, nstart = 20)
+u_shap_km <- u_shap |> mutate(cluster = factor(km_fit$cluster))
+
+(plot_umap(u_shap,    "PAM") |
+ plot_umap(u_shap_km, "k-means"))
+```
+
+**💡 What you learn**: When the embedding cleanly separates the phenotypes (as the SHAP-space UMAP does here), the choice of clusterer barely changes the partition — k-means and PAM agree. When the embedding is poor, no downstream clusterer can recover structure that is not present. What determines the result is the choice of **input representation** — here, SHAP rather than raw covariates — far more than the choice between k-means, PAM, hierarchical clustering, or any other algorithm.
+:::
+
+## Further reading
+
+- Nguyen, L. H., & Holmes, S. (2019). *Ten quick tips for effective dimensionality reduction.* PLOS Computational Biology, 15(6), e1006907.
+- Jain, A. K. (2010). *Data clustering: 50 years beyond K-means.* Pattern Recognition Letters, 31(8), 651–666.
+
+------------------------------------------------------------------------
+
+# Reveal, does SHAP space match the truth? {#sec-reveal}
+
+Until now we have never used `true_cluster`. Load the hidden ground-truth file and join it onto `df`, then score the three clusterings against it.
+
+```{r}
+#| label: load-truth
+
+truth <- read_csv("../../00_data/tobramycin_clusters.csv", show_col_types = FALSE) |>
+  mutate(true_cluster = factor(true_cluster))
+
+df <- df |> left_join(truth, by = "id")
+```
+
+```{r}
+#| label: ari-comparison
+
+ari_results <- tibble(
+  space = c("Posthoc PK space", "Outcome space", "SHAP space"),
+  ari   = c(
+    adjusted_rand_index(df$true_cluster, u_pk$cluster),
+    adjusted_rand_index(df$true_cluster, u_outcome$cluster),
+    adjusted_rand_index(df$true_cluster, u_shap$cluster)
+  )
+)
+
+ari_results |>
+  knitr::kable(digits = 3, caption = "Adjusted Rand Index by representation space")
+```
+
+```{r}
+#| label: reveal-plot
+#| fig-cap: "Same three UMAPs, this time coloured by hidden true_cluster"
+#| fig-width: 14
+#| fig-height: 4.5
+
+u_pk_t      <- u_pk      |> mutate(true_cluster = df$true_cluster)
+u_outcome_t <- u_outcome |> mutate(true_cluster = df$true_cluster)
+u_shap_t    <- u_shap    |> mutate(true_cluster = df$true_cluster)
+
+p_pk_t <- plot_umap(u_pk_t, "Posthoc PK — truth overlay",
+                    colour_col = "true_cluster")
+p_out_t <- plot_umap(u_outcome_t, "Outcome — truth overlay",
+                     colour_col = "true_cluster")
+p_shp_t <- plot_umap(u_shap_t, "SHAP — truth overlay",
+                     colour_col = "true_cluster")
+
+(p_pk_t | p_out_t | p_shp_t)
+```
+
+::: callout-important
+## Take-home
+
+- Posthoc PK-space ARI = `r round(ari_results$ari[ari_results$space == "Posthoc PK space"], 2)`: individual PK parameters alone do not separate risk phenotypes.
+- Outcome-space ARI = `r round(ari_results$ari[ari_results$space == "Outcome space"], 2)`: naive ML recovers the event-vs-no-event split but cannot tell the other phenotypes apart.
+- SHAP-space ARI = `r round(ari_results$ari[ari_results$space == "SHAP space"], 2)`: XGBoost + SHAP, filtered to the top drivers, exposes risk-driver phenotypes that nothing else does.
+:::
+
+::: {.callout-warning icon="false"}
+## 🔧 Try it · Score your own modification
+
+If you ran Block 3's required exercise, compute the ARI for `u_shap_k4` and `u_shap_k5`. How do they compare to baseline?
+
+```{r}
+#| label: try-reveal-ari-k
+#| eval: !expr params$instructor
+
+tibble(
+  clustering = c("Baseline · k = 3", "k = 4", "k = 5"),
+  ari = c(
+    adjusted_rand_index(df$true_cluster, u_shap$cluster),
+    adjusted_rand_index(df$true_cluster, u_shap_k4$cluster),
+    adjusted_rand_index(df$true_cluster, u_shap_k5$cluster)
+  )
+) |>
+  knitr::kable(digits = 3, caption = "ARI by chosen k")
+```
+
+**💡 What you learn**: Adjusted Rand Index is a **chance-corrected partition-agreement score** — it scores you on whether the patient groupings match, not on whether the cluster labels happen to line up. Reporting your own `k`-choice's ARI alongside the baseline converts a hyperparameter question into a quantitative comparison against the hidden ground truth, so the choice of `k` can be justified by a numeric criterion rather than by visual inspection of the UMAP.
+:::
+
+::: {.callout-tip icon="false" collapse="true"}
+## 🚀 Bonus 1 · Does combining input spaces beat SHAP alone?
+
+Concatenate top-8 SHAP features with outcome features and re-run UMAP+PAM.
+
+```{r}
+#| label: try-reveal-shap-plus-outcome
+#| eval: !expr params$instructor
+
+combined_mat <- cbind(shap_top, outcome_mat)
+u_combined   <- run_dim_reduction_clustering(combined_mat, k = 3, seed = 2026)
+
+tibble(
+  space = c("SHAP only (baseline)", "SHAP + outcome"),
+  ari = c(
+    adjusted_rand_index(df$true_cluster, u_shap$cluster),
+    adjusted_rand_index(df$true_cluster, u_combined$cluster)
+  )
+) |>
+  knitr::kable(digits = 3, caption = "ARI: SHAP-only vs SHAP+outcome")
+```
+
+**💡 What you learn**: More columns do not guarantee better cluster recovery. The outcome features (`nephro_binary`, `peak_delta_scr`, `auc24`, `cmin`) add noise *relative to the SHAP features*, because SHAP already encodes the model's compressed view of how every covariate drives the outcome — re-adding the outcomes themselves dilutes that signal. UMAP and PAM both depend on the signal-to-noise ratio of the input matrix; concatenating additional columns without assessing what they contribute typically reduces ARI rather than improving it.
+:::
+
+## Further reading
+
+- Cooper, A., Doyle, O., & Bourke, A. (2021). *Supervised clustering for subgroup discovery: an application to COVID-19 symptomatology.* In Joint European Conference on Machine Learning and Knowledge Discovery in Databases (pp. 408–422). Springer, Cham.
+
+```{r}
+#| label: session-info
+#| code-fold: true
+sessionInfo()
+```

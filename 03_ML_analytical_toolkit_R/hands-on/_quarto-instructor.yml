@@ -1,0 +1,6 @@
+# Activated with: quarto render tutorial.qmd --profile instructor
+# Quarto sets QUARTO_PROFILE=instructor, which flips params$instructor to TRUE
+# (see the params: block in tutorial.qmd), so every gated chunk is evaluated.
+format:
+  html:
+    output-file: tutorial_with_answers.html

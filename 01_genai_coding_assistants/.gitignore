@@ -1,0 +1,8 @@
+*.R
+*/
+!.utils/
+!slides/
+!solutions/
+*.png
+*.yml
+*.qmd

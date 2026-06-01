@@ -1,0 +1,226 @@
+{
+  "title": "List of built-in models as of NONMEM 7.4 (PREDPP guide VI1)",
+  "models": [
+    {
+      "model_type_subroutine": "ADVAN1",
+      "compartments": "1=CENTRAL 2=OUTPUT",
+      "model_description": "One-compartment linear model",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": "K, V"
+    },
+    {
+      "model_type_subroutine": "ADVAN1",
+      "compartments": "1=CENTRAL 2=OUTPUT",
+      "model_description": "One-compartment linear model",
+      "parameterization_subroutine": "TRANS2",
+      "basic_parameters": "CL, V"
+    },
+    {
+      "model_type_subroutine": "ADVAN2",
+      "compartments": "1=DEPOT 2=CENTRAL 3=OUTPUT",
+      "model_description": "One-compartment linear model with first-order absorption",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": "KA, K"
+    },
+    {
+      "model_type_subroutine": "ADVAN2",
+      "compartments": "1=DEPOT 2=CENTRAL 3=OUTPUT",
+      "model_description": "One-compartment linear model with first-order absorption",
+      "parameterization_subroutine": "TRANS2",
+      "basic_parameters": "CL, V, KA"
+    },
+    {
+      "model_type_subroutine": "ADVAN3",
+      "compartments": "1=CENTRAL 2=PERIPHERAL 3=OUTPUT",
+      "model_description": "Two-compartment linear mammillary model",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": "K, K12, K21"
+    },
+    {
+      "model_type_subroutine": "ADVAN3",
+      "compartments": "1=CENTRAL 2=PERIPHERAL 3=OUTPUT",
+      "model_description": "Two-compartment linear mammillary model",
+      "parameterization_subroutine": "TRANS3",
+      "basic_parameters": "CL, V, Q, VSS"
+    },
+    {
+      "model_type_subroutine": "ADVAN3",
+      "compartments": "1=CENTRAL 2=PERIPHERAL 3=OUTPUT",
+      "model_description": "Two-compartment linear mammillary model",
+      "parameterization_subroutine": "TRANS4",
+      "basic_parameters": "CL, V1, Q, V2"
+    },
+    {
+      "model_type_subroutine": "ADVAN3",
+      "compartments": "1=CENTRAL 2=PERIPHERAL 3=OUTPUT",
+      "model_description": "Two-compartment linear mammillary model",
+      "parameterization_subroutine": "TRANS5",
+      "basic_parameters": "AOB, ALPHA, BETA"
+    },
+    {
+      "model_type_subroutine": "ADVAN3",
+      "compartments": "1=CENTRAL 2=PERIPHERAL 3=OUTPUT",
+      "model_description": "Two-compartment linear mammillary model",
+      "parameterization_subroutine": "TRANS6",
+      "basic_parameters": "ALPHA, BETA, K21"
+    },
+    {
+      "model_type_subroutine": "ADVAN4",
+      "compartments": "1=DEPOT 2=CENTRAL 3=PERIPHERAL 4=OUTPUT",
+      "model_description": "Two-compartment linear mammillary model with first-order absorption",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": "KA, K, K23, K32"
+    },
+    {
+      "model_type_subroutine": "ADVAN4",
+      "compartments": "1=DEPOT 2=CENTRAL 3=PERIPHERAL 4=OUTPUT",
+      "model_description": "Two-compartment linear mammillary model with first-order absorption",
+      "parameterization_subroutine": "TRANS3",
+      "basic_parameters": "CL, V, Q, VSS, KA"
+    },
+    {
+      "model_type_subroutine": "ADVAN4",
+      "compartments": "1=DEPOT 2=CENTRAL 3=PERIPHERAL 4=OUTPUT",
+      "model_description": "Two-compartment linear mammillary model with first-order absorption",
+      "parameterization_subroutine": "TRANS4",
+      "basic_parameters": "CL, V2, Q, V3, KA"
+    },
+    {
+      "model_type_subroutine": "ADVAN4",
+      "compartments": "1=DEPOT 2=CENTRAL 3=PERIPHERAL 4=OUTPUT",
+      "model_description": "Two-compartment linear mammillary model with first-order absorption",
+      "parameterization_subroutine": "TRANS5",
+      "basic_parameters": "AOB, ALPHA, BETA, KA"
+    },
+    {
+      "model_type_subroutine": "ADVAN4",
+      "compartments": "1=DEPOT 2=CENTRAL 3=PERIPHERAL 4=OUTPUT",
+      "model_description": "Two-compartment linear mammillary model with first-order absorption",
+      "parameterization_subroutine": "TRANS6",
+      "basic_parameters": "ALPHA, BETA, K32, KA"
+    },
+    {
+      "model_type_subroutine": "ADVAN10",
+      "compartments": "1=CENTRAL 2=OUTPUT",
+      "model_description": "One-compartment model with Michaelis-Menten elimination",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": "VM, KM"
+    },
+    {
+      "model_type_subroutine": "ADVAN11",
+      "compartments": "1=CENTRAL 2=PERIPHERAL 1 3=PERIPHERAL 2 4=OUTPUT",
+      "model_description": "Three-compartment linear mammillary model",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": "K, K12, K21, K13, K31"
+    },
+    {
+      "model_type_subroutine": "ADVAN11",
+      "compartments": "1=CENTRAL 2=PERIPHERAL 1 3=PERIPHERAL 2 4=OUTPUT",
+      "model_description": "Three-compartment linear mammillary model",
+      "parameterization_subroutine": "TRANS4",
+      "basic_parameters": "CL, V1, Q2, V2, Q3, V3"
+    },
+    {
+      "model_type_subroutine": "ADVAN11",
+      "compartments": "1=CENTRAL 2=PERIPHERAL 1 3=PERIPHERAL 2 4=OUTPUT",
+      "model_description": "Three-compartment linear mammillary model",
+      "parameterization_subroutine": "TRANS6",
+      "basic_parameters": "ALPHA, BETA, GAMMA, K21, K31"
+    },
+    {
+      "model_type_subroutine": "ADVAN12",
+      "compartments": "1=DEPOT 2=CENTRAL 3=PERIPHERAL 1 4=PERIPHERAL 2 5=OUTPUT",
+      "model_description": "Three-compartment linear mammillary model with first-order absorption",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": "KA, K, K23, K32, K24, K42"
+    },
+    {
+      "model_type_subroutine": "ADVAN12",
+      "compartments": "1=DEPOT 2=CENTRAL 3=PERIPHERAL 1 4=PERIPHERAL 2 5=OUTPUT",
+      "model_description": "Three-compartment linear mammillary model with first-order absorption",
+      "parameterization_subroutine": "TRANS4",
+      "basic_parameters": "CL, V2, Q3, V3, Q4, V4, KA"
+    },
+    {
+      "model_type_subroutine": "ADVAN12",
+      "compartments": "1=DEPOT 2=CENTRAL 3=PERIPHERAL 1 4=PERIPHERAL 2 5=OUTPUT",
+      "model_description": "Three-compartment linear mammillary model with first-order absorption",
+      "parameterization_subroutine": "TRANS6",
+      "basic_parameters": "ALPHA, BETA, GAMMA, KA, K32, K42"
+    },
+    {
+      "model_type_subroutine": "ADVAN5",
+      "compartments": "GENERAL LINEAR MODEL",
+      "model_description": "General linear model (with real or complex eigenvalues)",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": ""
+    },
+    {
+      "model_type_subroutine": "ADVAN7",
+      "compartments": "GENERAL LINEAR MODEL WITH REAL EIGENVALUES",
+      "model_description": "General linear model with real eigenvalues",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": ""
+    },
+    {
+      "model_type_subroutine": "ADVAN6",
+      "compartments": "GENERAL NONLINEAR MODEL: RK56 ODE SOLVER (NONSTIFF)",
+      "model_description": "General nonlinear model (DVERK1)",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": ""
+    },
+    {
+      "model_type_subroutine": "ADVAN8",
+      "compartments": "GENERAL NONLINEAR MODEL: GEAR ODE SOLVER",
+      "model_description": "General Nonlinear Model with Stiff Differential Equations (DGEAR1)",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": ""
+    },
+    {
+      "model_type_subroutine": "ADVAN9",
+      "compartments": "GENERAL NONLINEAR MODEL: LSODI ODE SOLVER, AND DIFFERENTIAL-ALGEBRAIC EQUATIONS (ADE)",
+      "model_description": "General nonlinear model with equilibrium compartments (ordinary and algebraic differential equations, LSODI1)",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": ""
+    },
+    {
+      "model_type_subroutine": "ADVAN13",
+      "compartments": "GENERAL NONLINEAR MODEL: LSODA ODE SOLVER",
+      "model_description": "General nonlinear model with stiff or non-stiff differential equations (LSODA)",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": ""
+    },
+    {
+      "model_type_subroutine": "ADVAN14",
+      "compartments": "GENERAL NONLINEAR MODEL: CVODES ODE SOLVER",
+      "model_description": "General nonlinear model with stiff non-stiff differential equations (CVODES)",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": ""
+    },
+    {
+      "model_type_subroutine": "ADVAN15",
+      "compartments": "GENERAL NONLINEAR MODEL: IDAS ODE AND ADE SOLVER",
+      "model_description": "General nonlinear model with equilibrium compartments (ordinary and algebraic differential equations, IDAS)",
+      "parameterization_subroutine": "TRANS1",
+      "basic_parameters": ""
+    }
+  ],
+  "parameter_definitions": {
+    "K": "rate constant of elimination",
+    "V": "central volume",
+    "Kxy": "rate constant of transfer from compartment x to compartment y",
+    "Vx": "compartment x volume",
+    "CL": "clearance",
+    "KA": "rate constant of absorption",
+    "Q": "intercompartmental clearance",
+    "VSS": "volume of distribution at steady state",
+    "AOB": "A over B, macroconstant",
+    "ALPHA": "alpha (first) exponent, macroconstant",
+    "BETA": "beta (second) exponent, macroconstant",
+    "GAMMA": "gamma (third) exponent, macroconstant",
+    "VM": "maximum velocity (Michaelis-Menten)",
+    "KM": "Michaelis constant"
+  },
+  "source": "NONMEM 7.4 (PREDPP guide VI1)",
+  "reference": "CPT Pharmacometrics & Systems Pharmacology - 2019 - Bauer"
+}
